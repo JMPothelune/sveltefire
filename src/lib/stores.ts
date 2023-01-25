@@ -7,6 +7,8 @@ import type {
   DocumentReference,
 } from 'firebase/firestore';
 import { onAuthStateChanged, type Auth } from 'firebase/auth';
+import { deepEqual } from '@firebase/util';
+type WithDocIdAndRef<T> = T & { id?: string, ref?: DocumentReference };
 
 /**
  * @param  {Firestore} firestore firebase firestore instance
@@ -57,7 +59,7 @@ export function docStore<T extends WithFieldValue<DocumentData>>(
 
 
   const setDocument = ( value: T ) => {
-    setDoc(docRef, value);
+    updateDocument( () => value );
   };
 
 
@@ -70,16 +72,18 @@ export function docStore<T extends WithFieldValue<DocumentData>>(
   };
 }
 
+
+
 /**
  * @param  {Firestore} firestore firebase firestore instance
  * @param  {string|Query|CollectionReference} ref collection path, reference, or query
  * @param  {[]} startWith optional default data
  * @returns a store with realtime updates on collection data
  */
-export function collectionStore<T>(
+export function collectionStore<T extends WithFieldValue<DocumentData>>(
   firestore: Firestore,
   ref: string | Query | CollectionReference,
-  startWith: T[] = []
+  startWith: (WithDocIdAndRef<T>)[] = []
 ) {
   let unsubscribe: () => void;
 
@@ -95,10 +99,11 @@ export function collectionStore<T>(
 
   const colRef = typeof ref === 'string' ? collection(firestore, ref) : ref;
 
-  const { subscribe } = writable(startWith, (set) => {
+
+  const { subscribe, update, set } = writable(startWith, (set) => {
     unsubscribe = onSnapshot(colRef, (snapshot) => {
       const data = snapshot.docs.map((s) => {
-        return { id: s.id, ref: s.ref, ...s.data() } as T;
+        return { id: s.id, ref: s.ref, ...s.data() } as WithDocIdAndRef<T>;
       });
       set(data);
     });
@@ -106,8 +111,48 @@ export function collectionStore<T>(
     return () => unsubscribe();
   });
 
+  const updateCollection = ( updater: Updater<WithDocIdAndRef<T>[]> ) => {
+    update( (previousCollection) => {
+      const newCollection = updater(previousCollection) || [];
+
+      const removedDocuments = previousCollection.filter( (doc) => {
+        return !newCollection.find( (newDoc) => {
+          return newDoc.id === doc.id;
+        });
+      });
+
+      for (const doc of removedDocuments || []) {
+        if(doc.ref){
+          deleteDoc(doc.ref);
+        }
+      }
+
+
+      const updatedDocuments = newCollection.filter( (newDoc) => {
+        return previousCollection.find( (doc) => {
+          return newDoc.id === doc.id && deepEqual(newDoc, doc);
+        });
+      });
+
+      for (const doc of newCollection || []) {
+        if(doc.ref){
+          setDoc(doc.ref, doc);
+        }
+      }
+
+      return newCollection;
+    });
+  };
+
+  const setCollection = ( value: WithDocIdAndRef<T>[] ) => {
+    updateCollection( () => value );
+  };
+
+
   return {
     subscribe,
+    update: updateCollection,
+    set: setCollection,
     ref: colRef,
   };
 }
