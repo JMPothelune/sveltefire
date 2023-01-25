@@ -152,6 +152,21 @@ export let data: PageData;
 const store = docStore(db, 'posts/test', data.thing);
 ```
 
+
+Update doc from svelte store capabilities
+
+```ts
+const post = docStore(db, 'posts/test');
+$post = data.thing;
+```
+
+```
+<button on:click={()=>{$post.likes++}}> 
+  {$post.likes} Likes 
+</button>
+```
+
+
 ## Realtime Components
 
 In addition to stores, SvelteFire provides a set of components that can build complex realtime apps without leaving the HTML.

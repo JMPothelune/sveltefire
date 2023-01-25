@@ -1,5 +1,5 @@
-import { writable } from 'svelte/store';
-import { doc, collection, onSnapshot } from 'firebase/firestore';
+import { writable, type Updater } from 'svelte/store';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, type WithFieldValue, type DocumentData } from 'firebase/firestore';
 import type {
   Firestore,
   Query,
@@ -14,7 +14,7 @@ import { onAuthStateChanged, type Auth } from 'firebase/auth';
  * @param  {any} startWith optional default data
  * @returns a store with realtime updates on document data
  */
-export function docStore<T>(
+export function docStore<T extends WithFieldValue<DocumentData>>(
   firestore: Firestore,
   ref: string | DocumentReference,
   startWith?: T
@@ -34,7 +34,7 @@ export function docStore<T>(
 
   const docRef = typeof ref === 'string' ? doc(firestore, ref) : ref;
 
-  const { subscribe } = writable<T | null>(startWith, (set) => {
+  const { subscribe, update, set } = writable<T | null>(startWith, (set) => {
     unsubscribe = onSnapshot(docRef, (snapshot) => {
       set((snapshot.data() as T) ?? null);
     });
@@ -42,8 +42,29 @@ export function docStore<T>(
     return () => unsubscribe();
   });
 
+  const updateDocument = ( updater: Updater<T | null> ) => {
+    update( (previousDoc: T | null ) => {
+      const newDoc = updater(previousDoc);
+      if(!newDoc){
+        setDoc(docRef, {});
+      }
+      else{
+        setDoc(docRef, newDoc);
+      }
+      return newDoc;
+    });
+  };
+
+
+  const setDocument = ( value: T ) => {
+    setDoc(docRef, value);
+  };
+
+
   return {
     subscribe,
+    update: updateDocument,
+    set: setDocument,
     ref: docRef,
     id: docRef.id,
   };
