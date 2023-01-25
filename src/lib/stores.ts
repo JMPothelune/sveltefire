@@ -1,5 +1,5 @@
 import { writable, type Updater } from 'svelte/store';
-import { doc, collection, onSnapshot, setDoc, deleteDoc, type WithFieldValue, type DocumentData } from 'firebase/firestore';
+import { doc, collection, onSnapshot, setDoc, deleteDoc, type WithFieldValue, type DocumentData, addDoc } from 'firebase/firestore';
 import type {
   Firestore,
   Query,
@@ -7,7 +7,7 @@ import type {
   DocumentReference,
 } from 'firebase/firestore';
 import { onAuthStateChanged, type Auth } from 'firebase/auth';
-import { deepEqual } from '@firebase/util';
+import { deepEqual, deepCopy } from '@firebase/util';
 type WithDocIdAndRef<T> = T & { id?: string, ref?: DocumentReference };
 
 /**
@@ -98,45 +98,42 @@ export function collectionStore<T extends WithFieldValue<DocumentData>>(
   }
 
   const colRef = typeof ref === 'string' ? collection(firestore, ref) : ref;
+  let internalDocs: WithDocIdAndRef<T>[] = [];
 
 
   const { subscribe, update, set } = writable(startWith, (set) => {
     unsubscribe = onSnapshot(colRef, (snapshot) => {
-      const data = snapshot.docs.map((s) => {
+      internalDocs = snapshot.docs.map((s) => {
         return { id: s.id, ref: s.ref, ...s.data() } as WithDocIdAndRef<T>;
       });
-      set(data);
+      set(deepCopy(internalDocs));
     });
 
     return () => unsubscribe();
   });
 
   const updateCollection = ( updater: Updater<WithDocIdAndRef<T>[]> ) => {
-    update( (previousCollection) => {
-      const newCollection = updater(previousCollection) || [];
-
-      const removedDocuments = previousCollection.filter( (doc) => {
-        return !newCollection.find( (newDoc) => {
-          return newDoc.id === doc.id;
-        });
-      });
-
-      for (const doc of removedDocuments || []) {
-        if(doc.ref){
-          deleteDoc(doc.ref);
-        }
-      }
-
+    update( () => {
+      const newCollection = updater(internalDocs) || [];
 
       const updatedDocuments = newCollection.filter( (newDoc) => {
-        return previousCollection.find( (doc) => {
-          return newDoc.id === doc.id && deepEqual(newDoc, doc);
+        const oldDoc = internalDocs.find( (doc) => {
+          return newDoc.id === doc.id;
         });
+
+        if(!oldDoc){
+          return true;
+        }
+        const { oldRef, ...oldData } = oldDoc;
+        const { newRef, ...newData } = newDoc;
+
+        return !deepEqual(oldData, newData);
       });
 
-      for (const doc of newCollection || []) {
-        if(doc.ref){
-          setDoc(doc.ref, doc);
+      for (const document of updatedDocuments || []) {
+        const { ref, ...data } = document;
+        if(ref){
+          setDoc(ref, data);
         }
       }
 
@@ -148,12 +145,44 @@ export function collectionStore<T extends WithFieldValue<DocumentData>>(
     updateCollection( () => value );
   };
 
+  const addDocument = (value: WithDocIdAndRef<T>, id?:string) => {
+    if(colRef.type !== 'collection'){
+      throw new Error('Cannot add document to a query');
+    }
+
+    const docId = id || value.id;
+
+    if(docId){
+      setDoc(doc(colRef as CollectionReference, docId), value);
+    }
+    
+    if(!docId){
+      addDoc(colRef as CollectionReference, value)
+    }
+  };
+
+  const removeDocument = (document:WithDocIdAndRef<T>) => {
+    let ref = document.ref;
+
+    if(!ref && colRef.type === 'collection'){
+      ref = doc(colRef as CollectionReference, document.id);
+    }
+
+    if(!ref){
+      throw new Error('Cannot delete document without ref nor id');
+    }
+
+    deleteDoc(ref);
+  };
+
 
   return {
     subscribe,
     update: updateCollection,
     set: setCollection,
     ref: colRef,
+    add: addDocument,
+    delete: removeDocument,
   };
 }
 /**
